@@ -6,6 +6,7 @@ import api from '../utils/api';
 import { useAuth } from '../context/AuthContext';
 import { formatDate } from '../utils/helpers';
 import toast from 'react-hot-toast';
+import DOMPurify from 'dompurify';
 
 // Helper function to construct media URLs
 const getMediaUrl = (path) => {
@@ -209,10 +210,16 @@ const Comments = ({ postId }) => {
     e.preventDefault();
     if (!newComment.trim()) return;
 
+    const sanitizedComment = DOMPurify.sanitize(newComment.trim());
+    if (!sanitizedComment) {
+      toast.error('Invalid comment content');
+      return;
+    }
+
     setSubmitting(true);
     try {
       const response = await api.post(`/posts/${postId}/comments`, {
-        text: newComment.trim()
+        text: sanitizedComment
       });
       setComments([response.data, ...comments]);
       setNewComment('');

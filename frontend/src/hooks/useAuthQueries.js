@@ -38,10 +38,16 @@ export const useUpdateUser = () => {
 
 // Generate 2FA secret
 export const useGenerate2FA = () => {
+  const queryClient = useQueryClient();
+
   return useMutation({
     mutationFn: async () => {
       const response = await api.post('/auth/2fa/generate');
       return response.data;
+    },
+    onSuccess: () => {
+      // Invalidate user query to refetch with new 2FA data
+      queryClient.invalidateQueries({ queryKey: authKeys.user });
     },
   });
 };

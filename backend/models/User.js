@@ -36,6 +36,14 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: true // 2FA is enabled by default for new users
   },
+  failedLoginAttempts: {
+    type: Number,
+    default: 0
+  },
+  lockoutUntil: {
+    type: Date,
+    default: null
+  },
   joinedAt: {
     type: Date,
     default: Date.now

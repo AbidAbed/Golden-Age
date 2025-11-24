@@ -34,8 +34,10 @@ const authenticateToken = async (req, res, next) => {
 
 const isAdmin = (req, res, next) => {
   if (!req.user || req.user.role !== 'admin') {
+    logger.warn(`Unauthorized admin access attempt by user: ${req.user ? req.user.userId : 'unknown'} from IP: ${req.ip} at ${req.originalUrl}`);
     return res.status(403).json({ message: 'Admin access required' });
   }
+  logger.info(`Admin action by user: ${req.user.userId} (${req.user.username}) from IP: ${req.ip} at ${req.originalUrl}`);
   next();
 };
 

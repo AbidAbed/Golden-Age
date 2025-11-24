@@ -349,6 +349,7 @@ const Profile = () => {
   const [avatarFile, setAvatarFile] = useState(null);
   const [avatarPreview, setAvatarPreview] = useState('');
   const [avatarError, setAvatarError] = useState(false);
+  const [tempSecret, setTempSecret] = useState('');
 
   useEffect(() => {
     if (user && user.username) {
@@ -552,14 +553,9 @@ const Profile = () => {
       
       const data = await generate2FAMutation.mutateAsync();
       
-      // Update user context with the new secret and otpauthUrl
-      const updatedUser = { 
-        ...user, 
-        twoFactorSecret: data.secret,
-        otpauthUrl: data.otpauthUrl,
-        qrCodeUrl: data.qrCodeUrl
-      };
-      updateAuthUser(updatedUser);
+      // The query will refetch and update user with qrCodeUrl
+      // Store the secret temporarily for display
+      setTempSecret(data.secret);
       
       setTwoFAStep(1); // Move to verification step
       setSuccessMessage('2FA secret generated. Please scan the QR code and verify.');
@@ -588,6 +584,7 @@ const Profile = () => {
       await verify2FAMutation.mutateAsync(token);
       
       setSuccessMessage('Two-Factor Authentication enabled successfully!');
+      setTempSecret('');
       setTwoFAStep(0);
       setVerificationCode(['', '', '', '', '', '']);
     } catch (error) {
@@ -621,11 +618,13 @@ const Profile = () => {
       // Clear the generated secret from user state
       const updatedUser = { ...user, twoFactorSecret: null, otpauthUrl: null };
       updateAuthUser(updatedUser);
+      setTempSecret('');
       setTwoFAStep(0);
       setVerificationCode(['', '', '', '', '', '']);
     } catch (error) {
       console.error('Cancel 2FA error:', error);
       // Still reset UI even if backend call fails
+      setTempSecret('');
       setTwoFAStep(0);
       setVerificationCode(['', '', '', '', '', '']);
     }
@@ -897,10 +896,10 @@ const Profile = () => {
                       marginBottom: '16px'
                     }}>
                       {/* QR Code using Google Charts API */}
-                      {user.qrCodeUrl ? (
+                      {user.otpauthUrl ? (
                         <div style={{ textAlign: 'center', marginBottom: '16px' }}>
                           <img 
-                            src={user.qrCodeUrl} 
+                            src={user.qrCodeUrl || `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(user.otpauthUrl)}`} 
                             alt="QR Code" 
                             style={{ 
                               display: 'block', 
@@ -923,7 +922,7 @@ const Profile = () => {
                       )}
                     </div>
                     <p style={{ color: 'rgba(255, 255, 255, 0.7)', marginBottom: '16px', wordBreak: 'break-all' }}>
-                      Secret Key: <strong>{user.twoFactorSecret}</strong>
+                      Secret Key: <strong>{tempSecret || user.twoFactorSecret}</strong>
                     </p>
                     <p style={{ color: 'rgba(255, 255, 255, 0.9)', marginBottom: '16px', fontWeight: '600' }}>
                       Then, enter the 6-digit code from your app to verify:

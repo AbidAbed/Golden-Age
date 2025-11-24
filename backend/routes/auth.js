@@ -4,29 +4,54 @@ const bcrypt = require('bcrypt');
 const User = require('../models/User');
 const { authenticateToken, isAdmin } = require('../middleware/auth');
 const speakeasy = require('speakeasy');
+const { body, validationResult } = require('express-validator');
+const rateLimit = require('express-rate-limit');
 
 const logger = require('../utils/logger'); // Assuming a logger utility exists
 
 const router = express.Router();
 
-// Register user (public registration for users)
-router.post('/register', async (req, res) => {
-  try {
-    const { username, password } = req.body;
+// Stricter rate limiting for login
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // limit each IP to 5 login attempts per windowMs
+  message: 'Too many login attempts from this IP, please try again later.',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
 
-    // Basic input validation
-    if (!username || !password) {
-      logger.warn('Registration attempt with missing username or password');
-      return res.status(400).json({ message: 'Username and password are required' });
+// Rate limiting for 2FA operations
+const twoFALimiter = rateLimit({
+  windowMs: 5 * 60 * 1000, // 5 minutes
+  max: 5, // limit each IP to 5 2FA operations per windowMs
+  message: 'Too many 2FA operations, please wait before trying again.',
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+// Register user (public registration for users)
+router.post('/register', [
+  body('username')
+    .isLength({ min: 3, max: 30 })
+    .withMessage('Username must be between 3 and 30 characters')
+    .isAlphanumeric()
+    .withMessage('Username must contain only letters and numbers')
+    .trim()
+    .escape(),
+  body('password')
+    .isLength({ min: 6 })
+    .withMessage('Password must be at least 6 characters long')
+    .matches(/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/)
+    .withMessage('Password must contain at least one lowercase letter, one uppercase letter, and one number')
+], async (req, res) => {
+  try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      logger.warn('Registration validation failed:', errors.array());
+      return res.status(400).json({ message: 'Validation failed', errors: errors.array() });
     }
-    if (username.length < 3 || username.length > 30) {
-      logger.warn(`Registration attempt with invalid username length: ${username}`);
-      return res.status(400).json({ message: 'Username must be between 3 and 30 characters' });
-    }
-    if (password.length < 6) {
-      logger.warn(`Registration attempt with weak password for user: ${username}`);
-      return res.status(400).json({ message: 'Password must be at least 6 characters long' });
-    }
+
+    const { username, password } = req.body;
 
     // Check if user already exists
     const existingUser = await User.findOne({ username });
@@ -73,15 +98,26 @@ router.post('/register', async (req, res) => {
 });
 
 // Login
-router.post('/login', async (req, res) => {
+router.post('/login', loginLimiter, [
+  body('username')
+    .notEmpty()
+    .withMessage('Username is required')
+    .isAlphanumeric()
+    .withMessage('Username must contain only letters and numbers')
+    .trim()
+    .escape(),
+  body('password')
+    .notEmpty()
+    .withMessage('Password is required')
+], async (req, res) => {
   try {
-    const { username, password } = req.body;
-
-    // Basic input validation
-    if (!username || !password) {
-      logger.warn('Login attempt with missing username or password');
-      return res.status(400).json({ message: 'Username and password are required' });
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      logger.warn('Login validation failed:', errors.array());
+      return res.status(400).json({ message: 'Validation failed', errors: errors.array() });
     }
+
+    const { username, password } = req.body;
 
     // Find user by username
     const user = await User.findOne({ username });
@@ -91,14 +127,34 @@ router.post('/login', async (req, res) => {
       return res.status(401).json({ message: 'Invalid credentials' });
     }
 
+    // Check if account is locked
+    if (user.lockoutUntil && user.lockoutUntil > Date.now()) {
+      logger.warn(`Login attempt for locked account: ${username}`);
+      return res.status(423).json({ message: 'Account is temporarily locked due to too many failed login attempts. Try again later.' });
+    }
+
     const isPasswordValid = await user.comparePassword(password);
     if (!isPasswordValid) {
-      logger.warn(`Login attempt failed for user ${username}: Invalid password`);
+      // Increment failed attempts
+      user.failedLoginAttempts += 1;
+      
+      // Lock account after 5 failed attempts for 15 minutes
+      if (user.failedLoginAttempts >= 5) {
+        user.lockoutUntil = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+        logger.warn(`Account locked for user ${username} due to too many failed attempts`);
+      }
+      
+      await user.save();
+      logger.warn(`Login attempt failed for user ${username}: Invalid password (${user.failedLoginAttempts}/5)`);
       return res.status(401).json({ message: 'Invalid credentials' });
     }
 
+    // Reset failed attempts on successful password validation
+    user.failedLoginAttempts = 0;
+    user.lockoutUntil = null;
+
     // If 2FA is enabled, prompt for 2FA
-    if (user.totpSecret) { // Check for totpSecret
+    if (user.twoFactorEnabled && user.totpSecret) {
       logger.info(`User ${username} requires 2FA for login.`);
       return res.json({ need2fa: true, userId: user._id });
     }
@@ -132,7 +188,7 @@ router.post('/login', async (req, res) => {
 });
 
 // Verify 2FA during login or setup
-router.post('/verify-2fa', async (req, res) => {
+router.post('/verify-2fa', twoFALimiter, async (req, res) => {
   try {
     const { userId, twoFactorToken, secret } = req.body;
 
@@ -530,6 +586,12 @@ router.get('/me', authenticateToken, async (req, res) => {
     // Add computed fields
     const userResponse = user.toObject();
     // Return the stored twoFactorEnabled value
+    if (userResponse.totpSecret) {
+      // Generate otpauth URL for QR code if secret exists (for setup or enabled)
+      const otpauthUrl = `otpauth://totp/GoldenAge%20(${userResponse.username})?secret=${userResponse.totpSecret}&issuer=GoldenAge`;
+      userResponse.otpauthUrl = otpauthUrl;
+      userResponse.qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(otpauthUrl)}`;
+    }
     delete userResponse.totpSecret; // Remove the secret from response
 
     res.json({ user: userResponse });
@@ -590,6 +652,13 @@ router.put('/me', authenticateToken, async (req, res) => {
 
     // Update password if provided (pre-save hook will hash it)
     if (password) {
+      // Validate password strength
+      if (password.length < 6) {
+        return res.status(400).json({ message: 'Password must be at least 6 characters long' });
+      }
+      if (!/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)/.test(password)) {
+        return res.status(400).json({ message: 'Password must contain at least one lowercase letter, one uppercase letter, and one number' });
+      }
       user.password = password;
     }
 
@@ -607,7 +676,7 @@ router.put('/me', authenticateToken, async (req, res) => {
 });
 
 // Generate 2FA secret
-router.post('/2fa/generate', authenticateToken, async (req, res) => {
+router.post('/2fa/generate', authenticateToken, twoFALimiter, async (req, res) => {
   try {
     const user = await User.findById(req.user.userId);
     if (!user) return res.status(404).json({ message: 'User not found' });
@@ -651,7 +720,7 @@ router.post('/2fa/cancel', authenticateToken, async (req, res) => {
 });
 
 // Verify 2FA token during registration (with temp token)
-router.post('/verify-2fa-setup', async (req, res) => {
+router.post('/verify-2fa-setup', twoFALimiter, async (req, res) => {
   try {
     const { tempToken, token } = req.body;
 
@@ -685,7 +754,7 @@ router.post('/verify-2fa-setup', async (req, res) => {
 });
 
 // Verify 2FA token for authenticated user
-router.post('/2fa/verify', authenticateToken, async (req, res) => {
+router.post('/2fa/verify', authenticateToken, twoFALimiter, async (req, res) => {
   try {
     const { token } = req.body;
 

@@ -2,6 +2,7 @@ const express = require('express');
 const Request = require('../models/Request');
 const { authenticateToken, isAdmin } = require('../middleware/auth');
 const logger = require('../utils/logger'); // Import the logger
+const { body, validationResult } = require('express-validator');
 
 const router = express.Router();
 
@@ -80,33 +81,37 @@ router.get('/:id', authenticateToken, async (req, res) => {
 });
 
 // Create request (authenticated users)
-router.post('/', authenticateToken, async (req, res) => {
+router.post('/', authenticateToken, [
+  body('title')
+    .isLength({ min: 3, max: 200 })
+    .withMessage('Title must be between 3 and 200 characters')
+    .trim()
+    .escape(),
+  body('description')
+    .isLength({ min: 10, max: 1000 })
+    .withMessage('Description must be between 10 and 1000 characters')
+    .trim(),
+  body('category')
+    .isIn(['software', 'game', 'tool', 'plugin', 'other'])
+    .withMessage('Invalid category'),
+  body('priority')
+    .optional()
+    .isIn(['low', 'medium', 'high', 'urgent'])
+    .withMessage('Invalid priority')
+], async (req, res) => {
   try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      logger.warn('Create request validation failed:', errors.array());
+      return res.status(400).json({ message: 'Validation failed', errors: errors.array() });
+    }
+
     // Prevent admins from creating requests
     if (req.user.role === 'admin') {
       return res.status(403).json({ message: 'Administrators cannot create software requests' });
     }
 
     const { title, description, category, priority } = req.body;
-
-    // Basic input validation
-    if (!title || !description || !category) {
-      return res.status(400).json({ message: 'Title, description, and category are required' });
-    }
-    if (title.length < 3 || title.length > 200) {
-      return res.status(400).json({ message: 'Title must be between 3 and 200 characters' });
-    }
-    if (description.length < 10 || description.length > 1000) {
-      return res.status(400).json({ message: 'Description must be between 10 and 1000 characters' });
-    }
-    const allowedCategories = ['software', 'game', 'tool', 'plugin', 'other'];
-    if (!allowedCategories.includes(category)) {
-      return res.status(400).json({ message: 'Invalid category' });
-    }
-    const allowedPriorities = ['low', 'medium', 'high', 'urgent'];
-    if (priority && !allowedPriorities.includes(priority)) {
-      return res.status(400).json({ message: 'Invalid priority' });
-    }
 
     const requestData = {
       title,

@@ -8,6 +8,7 @@
     "@testing-library/react": "^13.4.0",
     "@testing-library/user-event": "^14.5.1",
     "axios": "^1.13.2",
+    "dompurify": "^3.3.0",
     "framer-motion": "^10.16.16",
     "multer": "^2.0.2",
     "qrcode.react": "^4.2.0",
@@ -44,7 +45,6 @@
       "last 1 safari version"
     ]
   },
-  "proxy": "http://localhost:5000",
   "devDependencies": {
     "react-scripts": "^5.0.1"
   }

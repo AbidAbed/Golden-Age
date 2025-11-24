@@ -3,6 +3,7 @@ const Post = require('../models/Post');
 const Comment = require('../models/Comment');
 const { authenticateToken, isAdmin, optionalAuth } = require('../middleware/auth');
 const logger = require('../utils/logger'); // Import the logger
+const { body, validationResult } = require('express-validator');
 
 const router = express.Router();
 
@@ -257,44 +258,55 @@ router.get('/:id', optionalAuth, async (req, res) => {
 });
 
 // Create post (admin only)
-router.post('/', authenticateToken, async (req, res) => {
+router.post('/', authenticateToken, [
+  body('title')
+    .isLength({ min: 3, max: 200 })
+    .withMessage('Title must be between 3 and 200 characters')
+    .trim()
+    .escape(),
+  body('description')
+    .isLength({ min: 10, max: 2000 })
+    .withMessage('Description must be between 10 and 2000 characters')
+    .trim(),
+  body('category')
+    .isIn(['software', 'game', 'tool', 'plugin', 'other'])
+    .withMessage('Invalid category'),
+  body('tags')
+    .optional()
+    .isArray()
+    .withMessage('Tags must be an array'),
+  body('version')
+    .optional()
+    .isLength({ max: 50 })
+    .withMessage('Version must be less than 50 characters')
+    .trim()
+    .escape(),
+  body('requirements')
+    .optional()
+    .isLength({ max: 500 })
+    .withMessage('Requirements must be less than 500 characters')
+    .trim(),
+  body('gofileLinks')
+    .optional()
+    .isArray()
+    .withMessage('Gofile links must be an array'),
+  body('screenshots')
+    .optional()
+    .isArray()
+    .withMessage('Screenshots must be an array'),
+  body('videos')
+    .optional()
+    .isArray()
+    .withMessage('Videos must be an array')
+], async (req, res) => {
   try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      logger.warn('Create post validation failed:', errors.array());
+      return res.status(400).json({ message: 'Validation failed', errors: errors.array() });
+    }
+
     const { title, description, category, tags, version, requirements, gofileLinks, screenshots, videos } = req.body;
-
-    // Basic input validation
-    if (!title || !description || !category) {
-      return res.status(400).json({ message: 'Title, description, and category are required' });
-    }
-    if (title.length < 3 || title.length > 200) {
-      return res.status(400).json({ message: 'Title must be between 3 and 200 characters' });
-    }
-    if (description.length < 10 || description.length > 2000) {
-      return res.status(400).json({ message: 'Description must be between 10 and 2000 characters' });
-    }
-    const allowedCategories = ['software', 'game', 'tool', 'plugin', 'other'];
-    if (!allowedCategories.includes(category)) {
-      return res.status(400).json({ message: 'Invalid category' });
-    }
-
-    // Validate tags
-    if (tags && !Array.isArray(tags) && typeof tags !== 'string') {
-      return res.status(400).json({ message: 'Tags must be an array or comma-separated string' });
-    }
-
-    // Validate gofileLinks
-    if (gofileLinks && !Array.isArray(gofileLinks)) {
-      return res.status(400).json({ message: 'gofileLinks must be an array' });
-    }
-
-    // Validate screenshots
-    if (screenshots && !Array.isArray(screenshots)) {
-      return res.status(400).json({ message: 'screenshots must be an array' });
-    }
-
-    // Validate videos
-    if (videos && !Array.isArray(videos)) {
-      return res.status(400).json({ message: 'videos must be an array' });
-    }
 
     const postData = {
       title,
@@ -651,15 +663,26 @@ router.get('/admin/ratings', authenticateToken, isAdmin, async (req, res) => {
 
 
 // Add comment to a post
-router.post('/:postId/comments', authenticateToken, async (req, res) => {
+router.post('/:postId/comments', authenticateToken, [
+  body('text')
+    .isLength({ min: 1, max: 1000 })
+    .withMessage('Comment must be between 1 and 1000 characters')
+    .trim(),
+  body('parentCommentId')
+    .optional()
+    .isMongoId()
+    .withMessage('Invalid parent comment ID')
+], async (req, res) => {
   try {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      logger.warn('Create comment validation failed:', errors.array());
+      return res.status(400).json({ message: 'Validation failed', errors: errors.array() });
+    }
+
     const { postId } = req.params;
     const { text, parentCommentId } = req.body;
     const author = req.user.userId;
-
-    if (!text || text.trim().length === 0) {
-      return res.status(400).json({ message: 'Comment content is required' });
-    }
 
     // Verify post exists
     const post = await Post.findById(postId);
